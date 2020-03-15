@@ -1,15 +1,39 @@
 #include <USBComposite.h>
+#include "debounce.h"
 
 #define JOYSTICK
+#define SERIAL_DEBUG
 
-uint32 analog1 = PA1;
-uint32 analog2 = PA3;
-uint32 button1 = PA2;
-uint32 button2 = PA4;
-uint32 down1 = 0;
-uint32 down2 = 0;
-uint32 a1 = 2048;
-uint32 a2 = 2048;
+#define NUM_PADDLES 2
+#define HYSTERESIS 4
+#define READ_ITERATIONS 4
+
+#define NO_VALUE 0xDEADBEEFul
+
+class AnalogPort {
+public:  
+  uint32 port;
+  uint32 oldValue;
+  uint32 getValue() {
+    
+    uint32 v = 0;
+    for (uint32 i = 0 ; i < READ_ITERATIONS ; i++) 
+      v += analogRead(port);
+    v = (v+READ_ITERATIONS/2) / READ_ITERATIONS;
+    if (oldValue != NO_VALUE) {
+      if (v < oldValue + HYSTERESIS && oldValue < v + HYSTERESIS)
+        v = oldValue;
+    }
+    oldValue = v;
+    return 4095-v;
+  };
+};
+
+AnalogPort analog[NUM_PADDLES] = { { PA1, NO_VALUE }, { PA3, NO_VALUE } };
+Debounce digital1(PA2);
+Debounce digital2(PA4);
+Debounce digital[NUM_PADDLES] = { digital1, digital2 };
+const uint32 mouseButtons[2] = { MOUSE_LEFT, MOUSE_RIGHT };
 
 const uint8_t reportDescription[] = {
   HID_ABS_MOUSE_REPORT_DESCRIPTOR(HID_MOUSE_REPORT_ID)
@@ -23,13 +47,13 @@ HIDAbsMouse mouse(HID);
 #endif
 
 void setup(){
-  pinMode(analog1, INPUT_ANALOG);
-  pinMode(analog2, INPUT_ANALOG);
-  pinMode(button1, INPUT_PULLDOWN);
-  pinMode(button2, INPUT_PULLDOWN);
-  //Serial.begin();
+  for (uint32 i = 0 ; i < NUM_PADDLES ; i++) {
+    pinMode(analog[i].port, INPUT_ANALOG);
+    pinMode(digital[i].pin, INPUT_PULLDOWN);
+  }
 #ifdef JOYSTICK
   HID.begin();
+  joy.setManualReportMode(true);
 #else  
   HID.begin(reportDescription, sizeof(reportDescription));
 #endif  
@@ -42,29 +66,30 @@ void setup(){
 }
 
 void loop(){
-  a1 = (3*a1 + (4095-analogRead(analog1)))/4;
-  a2 = (3*a2 + (4095-analogRead(analog2)))/4;
+  uint32 pots[NUM_PADDLES];
+
+  for (uint32 i = 0 ; i < NUM_PADDLES ; i++ ) {
+    pots[i] = analog[i].getValue();
+    uint32 b = digital[i].getEvent();
+    if (b != DEBOUNCE_NONE) {
+#ifdef JOYSTICK    
+      joy.button(i+1,b==DEBOUNCE_PRESSED);
+#else
+      if (b == DEBOUNCE_PRESSED)
+        mouse.press(mouseButtons[i]);
+      else
+        mouse.release(mouseButtons[i]);
+#endif      
+    }
+  }
 #ifdef JOYSTICK
-  joy.button(1,digitalRead(button1));
-  joy.button(2,digitalRead(button2));
-  joy.X(a1*1023/4095);
-  joy.Y(a2*1023/4095);
+  joy.X(pots[0] / 4);
+#if NUM_PADDLES > 1  
+  joy.Y(pots[1] / 4);
+#endif  
   joy.sendReport();
 #else  
-  if (down1 != digitalRead(button1)) {
-    down1 = !down1;
-    if (down1)
-      mouse.press(MOUSE_LEFT);
-    else
-      mouse.release(MOUSE_LEFT);
-  }
-  if (down2 != digitalRead(button2)) {
-    down2 = !down2;
-    if (down2)
-      mouse.press(MOUSE_RIGHT);
-    else
-      mouse.release(MOUSE_RIGHT);
-  }
-  mouse.move(32767*a1/4095,32767*a2/4095);
+  mouse.move(32767*pots[0]/4095,32767*pots[1]/4095);
 #endif
 }
+
