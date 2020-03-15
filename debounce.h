@@ -131,9 +131,10 @@ class DebounceAnalog : public Debounce {
         return lowState; 
     }
 
-    DebounceAnalog(int p, uint8_t active=HIGH, uint16_t threshold=512, uint32_t time=20) : Debounce() {
+    DebounceAnalog(int p, uint8_t active=HIGH, uint16_t _threshold=512, uint32_t time=20) : Debounce() {
       activeValue = active;
       debounceTime = time;  
+      threshold = _threshold;
       highState = active==HIGH;
       lowState = active==LOW;
       pin = p;

@@ -1,7 +1,17 @@
 #include <USBComposite.h>
 #include "debounce.h"
 
-#define JOYSTICK
+#define PRODUCT_ID 0x4BA2
+#define LED PC13
+
+enum {
+  MODE_JOYSTICK = 0,
+  MODE_DUAL_JOYSTICK,
+  MODE_MOUSE
+};
+
+int mode;
+
 #define SERIAL_DEBUG
 
 #define NUM_PADDLES 2
@@ -29,67 +39,113 @@ public:
   };
 };
 
-AnalogPort analog[NUM_PADDLES] = { { PA1, NO_VALUE }, { PA3, NO_VALUE } };
+AnalogPort analog1 = { PA1, NO_VALUE };
+AnalogPort analog2 = { PA3, NO_VALUE };
+AnalogPort* analog[NUM_PADDLES] = { &analog1, &analog2 };
 Debounce digital1(PA2);
 Debounce digital2(PA4);
-Debounce digital[NUM_PADDLES] = { digital1, digital2 };
+Debounce* digital[NUM_PADDLES] = { &digital1, &digital2 };
 const uint32 mouseButtons[2] = { MOUSE_LEFT, MOUSE_RIGHT };
 
-const uint8_t reportDescription[] = {
+const uint8_t mouseReportDescription[] = {
   HID_ABS_MOUSE_REPORT_DESCRIPTOR(HID_MOUSE_REPORT_ID)
 };
 
 USBHID HID;
-#ifdef JOYSTICK
-HIDJoystick joy(HID);
-#else
+HIDJoystick joy1(HID);
+HIDJoystick joy2(HID);
+HIDJoystick* joys[2] = { &joy1, &joy2 };
 HIDAbsMouse mouse(HID);
-#endif
 
 void setup(){
   for (uint32 i = 0 ; i < NUM_PADDLES ; i++) {
-    pinMode(analog[i].port, INPUT_ANALOG);
-    pinMode(digital[i].pin, INPUT_PULLDOWN);
+    pinMode(analog[i]->port, INPUT_ANALOG);
+    pinMode(digital[i]->pin, INPUT_PULLDOWN);
   }
-#ifdef JOYSTICK
-  HID.begin();
-  joy.setManualReportMode(true);
+#if NUM_PADDLES == 1
+  mode = digitalRead(digital[0]->pin) ? MODE_MOUSE : MODE_JOYSTICK;
 #else  
-  HID.begin(reportDescription, sizeof(reportDescription));
-#endif  
+  EEPROM8_init();
+  mode = EEPROM8_getValue(0);
+  if (mode < 0)
+    mode = MODE_JOYSTICK;  
+  uint32 a = digitalRead(digital[0]->pin);
+  uint32 b = digitalRead(digital[1]->pin);
+  if (a && !b) {
+    mode = MODE_JOYSTICK;
+    EEPROM8_storeValue(0,mode);
+  }
+  else if (!a && b) {
+    mode = MODE_MOUSE;
+    EEPROM8_storeValue(0,mode);
+  }
+  else if (a && b) {
+    mode = MODE_DUAL_JOYSTICK;
+    EEPROM8_storeValue(0,mode);
+  }
+#endif
+  pinMode(LED, OUTPUT);
+  digitalWrite(LED, mode != MODE_MOUSE);
+  HID.clear();
+  USBComposite.setProductId(PRODUCT_ID+mode);
+  if (mode == MODE_JOYSTICK) {
+    USBComposite.setProductString("Paddle Joystick");
+    joy1.registerProfile();
+    joy1.setManualReportMode(true);
+    HID.begin();
+  }
+  else if (mode == MODE_DUAL_JOYSTICK) {
+    USBComposite.setProductString("Paddle Dual Joystick");
+    for (uint32 i=0; i<NUM_PADDLES; i++) {
+      joys[i]->registerProfile();
+      joys[i]->setManualReportMode(true);
+    }
+    HID.begin();
+  }
+  else {
+    USBComposite.setProductString("Paddle Mouse");
+    HID.begin(mouseReportDescription, sizeof(mouseReportDescription));
+  }
   while (!USBComposite);
-  //delay(1000);
-/*  mouse.press(MOUSE_LEFT);
-  mouse.move(500,500);
-  mouse.release(MOUSE_ALL);
-  mouse.click(MOUSE_RIGHT); */
 }
 
 void loop(){
   uint32 pots[NUM_PADDLES];
 
   for (uint32 i = 0 ; i < NUM_PADDLES ; i++ ) {
-    pots[i] = analog[i].getValue();
-    uint32 b = digital[i].getEvent();
+    pots[i] = analog[i]->getValue();
+    uint32 b = digital[i]->getEvent();
     if (b != DEBOUNCE_NONE) {
-#ifdef JOYSTICK    
-      joy.button(i+1,b==DEBOUNCE_PRESSED);
-#else
-      if (b == DEBOUNCE_PRESSED)
-        mouse.press(mouseButtons[i]);
-      else
-        mouse.release(mouseButtons[i]);
-#endif      
+      if (mode == MODE_JOYSTICK)
+        joy1.button(i+1,b==DEBOUNCE_PRESSED);
+      else if (mode == MODE_DUAL_JOYSTICK) {
+        joys[i]->button(1,b==DEBOUNCE_PRESSED);
+      }
+      else {
+        if (b == DEBOUNCE_PRESSED)
+          mouse.press(mouseButtons[i]);
+        else
+          mouse.release(mouseButtons[i]);
+      }
     }
   }
-#ifdef JOYSTICK
-  joy.X(pots[0] / 4);
+  if (mode == MODE_JOYSTICK) {
+    joy1.X(pots[0] / 4);
 #if NUM_PADDLES > 1  
-  joy.Y(pots[1] / 4);
+    joy1.Y(pots[1] / 4);
 #endif  
-  joy.sendReport();
-#else  
-  mouse.move(32767*pots[0]/4095,32767*pots[1]/4095);
-#endif
+    joy1.sendReport();
+  }
+  else if (mode == MODE_DUAL_JOYSTICK) {
+    for(uint32 i=0 ; i<2 ; i++) {
+      uint16 v = pots[0] / 4;
+      joys[i]->X(v);
+      joys[i]->Y(v);
+      joys[i]->sendReport();
+    }
+  }
+  else {
+    mouse.move(32767*pots[0]/4095,32767*pots[1]/4095);
+  }
 }
 
