@@ -47,10 +47,6 @@ Debounce digital2(PA4);
 Debounce* digital[NUM_PADDLES] = { &digital1, &digital2 };
 const uint32 mouseButtons[2] = { MOUSE_LEFT, MOUSE_RIGHT };
 
-const uint8_t mouseReportDescription[] = {
-  HID_ABS_MOUSE_REPORT_DESCRIPTOR(HID_MOUSE_REPORT_ID)
-};
-
 USBHID HID;
 HIDJoystick joy1(HID);
 HIDJoystick joy2(HID);
@@ -104,7 +100,8 @@ void setup(){
   }
   else {
     USBComposite.setProductString("Paddle Mouse");
-    HID.begin(mouseReportDescription, sizeof(mouseReportDescription));
+    mouse.registerProfile();
+    HID.begin();
   }
   while (!USBComposite);
 }
