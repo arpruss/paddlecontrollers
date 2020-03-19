@@ -15,7 +15,8 @@ int mode;
 #define SERIAL_DEBUG
 
 #define NUM_PADDLES 2
-#define HYSTERESIS 4
+#define HYSTERESIS 16 // shifts smaller than this are rejected
+#define MAX_HYSTERESIS_REJECTIONS 8 // unless we've reached this many of them, and then we use an average
 #define READ_ITERATIONS 4
 
 #define NO_VALUE 0xDEADBEEFul
@@ -23,24 +24,48 @@ int mode;
 class AnalogPort {
 public:  
   uint32 port;
-  uint32 oldValue;
+  uint32 oldValue = NO_VALUE;
+  uint32 rejectedCount = 0;
+  uint32 rejectedSum = 0;
   uint32 getValue() {
     
     uint32 v = 0;
     for (uint32 i = 0 ; i < READ_ITERATIONS ; i++) 
       v += analogRead(port);
     v = (v+READ_ITERATIONS/2) / READ_ITERATIONS;
-    if (oldValue != NO_VALUE) {
-      if (v < oldValue + HYSTERESIS && oldValue < v + HYSTERESIS)
-        v = oldValue;
+    if (oldValue != NO_VALUE && v != oldValue && v < oldValue + HYSTERESIS && oldValue < v + HYSTERESIS) {
+        if (rejectedCount > 0) {
+          rejectedCount++;
+          rejectedSum += v;
+          if (rejectedCount >= MAX_HYSTERESIS_REJECTIONS) {
+            v = (rejectedSum + MAX_HYSTERESIS_REJECTIONS/2) / MAX_HYSTERESIS_REJECTIONS;
+            rejectedCount = 0;
+          }
+          else {
+            v = oldValue;
+          }
+        }
+        else {
+          rejectedCount = 1;
+          rejectedSum = v;
+          v = oldValue;
+        }
     }
+    else {
+      rejectedCount = 0;
+    }
+    
     oldValue = v;
     return 4095-v;
   };
+
+  AnalogPort(uint32 _port) {
+    port = _port;    
+  };
 };
 
-AnalogPort analog1 = { PA1, NO_VALUE };
-AnalogPort analog2 = { PA3, NO_VALUE };
+AnalogPort analog1(PA1);
+AnalogPort analog2(PA3);
 AnalogPort* analog[NUM_PADDLES] = { &analog1, &analog2 };
 Debounce digital1(PA2);
 Debounce digital2(PA4);
@@ -88,7 +113,6 @@ void setup(){
     USBComposite.setProductString("Paddle Joystick");
     joy1.registerProfile();
     joy1.setManualReportMode(true);
-    HID.begin();
   }
   else if (mode == MODE_DUAL_JOYSTICK) {
     USBComposite.setProductString("Paddle Dual Joystick");
@@ -96,13 +120,12 @@ void setup(){
       joys[i]->registerProfile();
       joys[i]->setManualReportMode(true);
     }
-    HID.begin();
   }
   else {
     USBComposite.setProductString("Paddle Mouse");
     mouse.registerProfile();
-    HID.begin();
   }
+  HID.begin();
   while (!USBComposite);
 }
 
@@ -135,7 +158,7 @@ void loop(){
   }
   else if (mode == MODE_DUAL_JOYSTICK) {
     for(uint32 i=0 ; i<2 ; i++) {
-      uint16 v = pots[0] / 4;
+      uint16 v = pots[i] / 4;
       joys[i]->X(v);
       joys[i]->Y(v);
       joys[i]->sendReport();
