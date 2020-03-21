@@ -3,11 +3,15 @@
 
 #define PRODUCT_ID 0x4BA2
 #define LED PC13
+#undef SUPPORT_X360 // not fully supported
 
 enum {
   MODE_JOYSTICK = 0,
   MODE_DUAL_JOYSTICK,
-  MODE_MOUSE
+  MODE_MOUSE,
+#ifdef SUPPORT_X360  
+  MODE_X360
+#endif
 };
 
 int mode;
@@ -77,6 +81,9 @@ HIDJoystick joy1(HID);
 HIDJoystick joy2(HID);
 HIDJoystick* joys[2] = { &joy1, &joy2 };
 HIDAbsMouse mouse(HID);
+#ifdef SUPPORT_X360
+USBXBox360 XBox360;
+#endif
 
 void setup(){
   for (uint32 i = 0 ; i < NUM_PADDLES ; i++) {
@@ -105,27 +112,42 @@ void setup(){
     EEPROM8_storeValue(0,mode);
   }
 #endif
+#ifdef SUPPORT_X360
+  mode = MODE_X360;
+#endif  
   pinMode(LED, OUTPUT);
   digitalWrite(LED, mode != MODE_MOUSE);
   HID.clear();
-  USBComposite.setProductId(PRODUCT_ID+mode);
   if (mode == MODE_JOYSTICK) {
-    USBComposite.setProductString("Paddle Joystick");
+    USBComposite.setVendorId(0x04d8);
+    USBComposite.setProductId(0xbeef);
+    USBComposite.setProductString("Stelladaptor");
     joy1.registerProfile();
     joy1.setManualReportMode(true);
+    HID.begin();
   }
   else if (mode == MODE_DUAL_JOYSTICK) {
+    USBComposite.setProductId(PRODUCT_ID+mode);
     USBComposite.setProductString("Paddle Dual Joystick");
     for (uint32 i=0; i<NUM_PADDLES; i++) {
       joys[i]->registerProfile();
       joys[i]->setManualReportMode(true);
     }
+    HID.begin();
   }
-  else {
+  else if (mode == MODE_MOUSE) {
+    USBComposite.setProductId(PRODUCT_ID+mode);
     USBComposite.setProductString("Paddle Mouse");
     mouse.registerProfile();
+    HID.begin();
   }
-  HID.begin();
+#ifdef SUPPORT_X360  
+  else if (mode == MODE_X360) {
+    USBComposite.setProductString("Paddle X360");
+    XBox360.begin();
+    XBox360.setManualReportMode(true);
+  }
+#endif  
   while (!USBComposite);
 }
 
@@ -138,9 +160,12 @@ void loop(){
     if (b != DEBOUNCE_NONE) {
       if (mode == MODE_JOYSTICK)
         joy1.button(i+1,b==DEBOUNCE_PRESSED);
-      else if (mode == MODE_DUAL_JOYSTICK) {
+      else if (mode == MODE_DUAL_JOYSTICK) 
         joys[i]->button(1,b==DEBOUNCE_PRESSED);
-      }
+#ifdef SUPPORT_X360        
+      else if (mode == MODE_X360) 
+        XBox360.button(i+1,b==DEBOUNCE_PRESSED);
+#endif        
       else {
         if (b == DEBOUNCE_PRESSED)
           mouse.press(mouseButtons[i]);
@@ -164,7 +189,16 @@ void loop(){
       joys[i]->sendReport();
     }
   }
-  else {
+#ifdef SUPPORT_X360  
+  else if (mode == MODE_X360) {
+    XBox360.X((int16)(pots[0] * 65535 / 4095) - 32767);
+#if NUM_PADDLES > 1  
+    XBox360.Y((int16)(pots[1] * 65535 / 4095) - 32767);
+#endif  
+    XBox360.send();
+  }
+#endif  
+  else if (mode == MODE_MOUSE) {
     mouse.move(32767*pots[0]/4095,32767*pots[1]/4095);
   }
 }
