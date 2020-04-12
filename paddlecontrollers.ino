@@ -5,6 +5,69 @@
 #define LED PC13
 #undef SUPPORT_X360 // not fully supported
 
+// modified from Stelladaptor
+uint8 dualAxisDualButton_desc[] = {
+    0x05, 0x01,                    // USAGE_PAGE (Generic Desktop)
+    0x15, 0x00,                    // LOGICAL_MINIMUM (0)
+    0x09, 0x04,                    // USAGE (Joystick)
+    0xa1, 0x01,                    // COLLECTION (Application)
+    0x85, 1,                       /*    REPORT_ID */ // not present in official Stelladaptor
+    0x15, 0x00,                    //   LOGICAL_MINIMUM (0)
+    0x26, 0xff, 0x03,              //   LOGICAL_MAXIMUM (1023) // 255 for official Stelladaptor
+    0x75, 0x0A,                    //   REPORT_SIZE (10) // 8 for official Stelladaptor
+    //0x95, 0x01,                    //   REPORT_COUNT (1) /* byte 0 unused */ // official Stelladaptor
+    //0x81, 0x03,                    //   INPUT (Cnst,Var,Abs)  // official Stelladaptor
+    0x05, 0x01,                    //   USAGE_PAGE (Generic Desktop)
+    0x09, 0x01,                    //   USAGE (Pointer)
+    0xa1, 0x00,                    //   COLLECTION (Physical)
+    0x09, 0x30,                    //     USAGE (X)
+    0x09, 0x31,                    //     USAGE (Y)
+    0x95, 0x02,                    //     REPORT_COUNT (2)
+    0x81, 0x02,                    //     INPUT (Data,Var,Abs)
+    0xc0,                          //     END_COLLECTION
+    0x15, 0x00,                    //   LOGICAL_MINIMUM (0)
+    0x25, 0x01,                    //   LOGICAL_MAXIMUM (1)
+    0x05, 0x09,                    //   USAGE_PAGE (Button)
+    0x19, 0x01,                    //   USAGE_MINIMUM (Button 1)
+    0x29, 0x02,                    //   USAGE_MAXIMUM (Button 2)
+    0x55, 0x00,                    //   UNIT_EXPONENT (0)
+    0x65, 0x00,                    //   UNIT (None)
+    0x75, 0x01,                    //   REPORT_SIZE (1)
+    0x95, 0x02,                    //   REPORT_COUNT (2) 
+    0x81, 0x02,                    //   INPUT (Data,Var,Abs)
+    0x95, 0x02,                    //   REPORT_COUNT (2) // 6 for official Stelladaptor
+    0x81, 0x03,                    //   INPUT (Cnst,Var,Abs)
+    0xc0                           // END_COLLECTION
+};
+
+HIDReportDescriptor dualAxisDualButton = {
+  dualAxisDualButton_desc,
+  sizeof(dualAxisDualButton_desc)
+};
+
+typedef struct {
+  uint8_t reportID;
+  unsigned x:10;
+  unsigned y:10;
+  uint8_t button1:1;
+  uint8_t button2:1;
+  uint8_t padding:2;
+} __packed SimpleJoystickReport_t;
+
+class HIDSimpleJoystick : public HIDReporter {
+public:
+    SimpleJoystickReport_t joyReport; 
+    HIDSimpleJoystick(USBHID& HID, uint8_t reportID=HID_JOYSTICK_REPORT_ID) 
+            : HIDReporter(HID, &dualAxisDualButton, (uint8_t*)&joyReport, sizeof(joyReport), reportID) {
+        joyReport.button1 = 0;
+        joyReport.button2 = 0;
+        joyReport.x = 512;
+        joyReport.y = 512;
+    }
+};
+
+
+
 enum {
   MODE_JOYSTICK = 0,
   MODE_DUAL_JOYSTICK,
@@ -19,9 +82,9 @@ int mode;
 #define SERIAL_DEBUG
 
 #define NUM_PADDLES 2
-#define HYSTERESIS 16 // shifts smaller than this are rejected
+#define HYSTERESIS 40 // shifts smaller than this are rejected
 #define MAX_HYSTERESIS_REJECTIONS 8 // unless we've reached this many of them, and then we use an average
-#define READ_ITERATIONS 4
+#define READ_ITERATIONS 8
 
 #define NO_VALUE 0xDEADBEEFul
 
@@ -77,9 +140,9 @@ Debounce* digital[NUM_PADDLES] = { &digital1, &digital2 };
 const uint32 mouseButtons[2] = { MOUSE_LEFT, MOUSE_RIGHT };
 
 USBHID HID;
-HIDJoystick joy1(HID);
-HIDJoystick joy2(HID);
-HIDJoystick* joys[2] = { &joy1, &joy2 };
+HIDSimpleJoystick joy1(HID);
+HIDSimpleJoystick joy2(HID);
+HIDSimpleJoystick* joys[2] = { &joy1, &joy2 };
 HIDAbsMouse mouse(HID);
 #ifdef SUPPORT_X360
 USBXBox360 XBox360;
@@ -121,9 +184,9 @@ void setup(){
   if (mode == MODE_JOYSTICK) {
     USBComposite.setVendorId(0x04d8);
     USBComposite.setProductId(0xbeef);
-    USBComposite.setProductString("Stelladaptor");
+    USBComposite.setManufacturerString("Grand Idea Studio");
+    USBComposite.setProductString("Stelladaptor 2600-to-USB Interface");
     joy1.registerProfile();
-    joy1.setManualReportMode(true);
     HID.begin();
   }
   else if (mode == MODE_DUAL_JOYSTICK) {
@@ -131,7 +194,6 @@ void setup(){
     USBComposite.setProductString("Paddle Dual Joystick");
     for (uint32 i=0; i<NUM_PADDLES; i++) {
       joys[i]->registerProfile();
-      joys[i]->setManualReportMode(true);
     }
     HID.begin();
   }
@@ -158,16 +220,21 @@ void loop(){
     pots[i] = analog[i]->getValue();
     uint32 b = digital[i]->getEvent();
     if (b != DEBOUNCE_NONE) {
-      if (mode == MODE_JOYSTICK)
-        joy1.button(i+1,b==DEBOUNCE_PRESSED);
+      uint8 pressed = b==DEBOUNCE_PRESSED;
+      if (mode == MODE_JOYSTICK) {
+        if (i==0)
+          joy1.joyReport.button1 = pressed;
+        else
+          joy1.joyReport.button2 = pressed;
+      }
       else if (mode == MODE_DUAL_JOYSTICK) 
-        joys[i]->button(1,b==DEBOUNCE_PRESSED);
+        joys[i]->joyReport.button1 = pressed;
 #ifdef SUPPORT_X360        
       else if (mode == MODE_X360) 
-        XBox360.button(i+1,b==DEBOUNCE_PRESSED);
+        XBox360.button(i+1,pressed);
 #endif        
       else {
-        if (b == DEBOUNCE_PRESSED)
+        if (pressed)
           mouse.press(mouseButtons[i]);
         else
           mouse.release(mouseButtons[i]);
@@ -175,17 +242,17 @@ void loop(){
     }
   }
   if (mode == MODE_JOYSTICK) {
-    joy1.X(pots[0] / 4);
+    joy1.joyReport.x = pots[0] / 4;
 #if NUM_PADDLES > 1  
-    joy1.Y(pots[1] / 4);
+    joy1.joyReport.y = pots[1] / 4;
 #endif  
     joy1.sendReport();
   }
   else if (mode == MODE_DUAL_JOYSTICK) {
     for(uint32 i=0 ; i<2 ; i++) {
       uint16 v = pots[i] / 4;
-      joys[i]->X(v);
-      joys[i]->Y(v);
+      joys[i]->joyReport.x = v;
+      joys[i]->joyReport.y = v;
       joys[i]->sendReport();
     }
   }
