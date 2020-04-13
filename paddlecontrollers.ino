@@ -1,9 +1,29 @@
 #include <USBComposite.h>
 #include "debounce.h"
+#include "usb_generic.h"
+#include <libmaple/usb.h>
+uint32 usb_hid_get_pending(void);
 
 #define PRODUCT_ID 0x4BA2
 #define LED PC13
+#define ANALOG1 PA1
+#define ANALOG2 PA3
 #undef SUPPORT_X360 // not fully supported
+#undef SERIAL_DEBUG
+
+// at READ_ITERATIONS=1, 12 ms
+// 20: 12 ms
+// 40: 12 ms
+// 80: 12 ms
+// 100: 16 ms
+// 800: 36 ms
+#define NUM_PADDLES 2
+#define HYSTERESIS 10 // shifts smaller than this are rejected
+#define MAX_HYSTERESIS_REJECTIONS 8 // unless we've reached this many of them, and then we use an average
+#define READ_ITERATIONS 80
+
+#define NO_VALUE 0xDEADBEEFul
+
 
 // modified from Stelladaptor
 uint8 dualAxisDualButton_desc[] = {
@@ -79,14 +99,16 @@ enum {
 
 int mode;
 
-#define SERIAL_DEBUG
+uint16 analogRead2(uint8 pin) {
+    return adc_read(pin == ANALOG1 ? &adc1 : &adc2, PIN_MAP[pin].adc_channel);
+}
 
-#define NUM_PADDLES 2
-#define HYSTERESIS 40 // shifts smaller than this are rejected
-#define MAX_HYSTERESIS_REJECTIONS 8 // unless we've reached this many of them, and then we use an average
-#define READ_ITERATIONS 8
-
-#define NO_VALUE 0xDEADBEEFul
+#ifdef SERIAL_DEBUG
+USBCompositeSerial debug;
+#define DEBUG(...) debug.println(__VA_ARGS__);
+#else
+#define DEBUG(...)
+#endif
 
 class AnalogPort {
 public:  
@@ -95,11 +117,14 @@ public:
   uint32 rejectedCount = 0;
   uint32 rejectedSum = 0;
   uint32 getValue() {
-    
     uint32 v = 0;
+
+    //nvic_globalirq_disable();
     for (uint32 i = 0 ; i < READ_ITERATIONS ; i++) 
-      v += analogRead(port);
+      v += analogRead2(port);
+    //nvic_globalirq_enable();
     v = (v+READ_ITERATIONS/2) / READ_ITERATIONS;
+
     if (oldValue != NO_VALUE && v != oldValue && v < oldValue + HYSTERESIS && oldValue < v + HYSTERESIS) {
         if (rejectedCount > 0) {
           rejectedCount++;
@@ -131,8 +156,8 @@ public:
   };
 };
 
-AnalogPort analog1(PA1);
-AnalogPort analog2(PA3);
+AnalogPort analog1(ANALOG1);
+AnalogPort analog2(ANALOG2);
 AnalogPort* analog[NUM_PADDLES] = { &analog1, &analog2 };
 Debounce digital1(PA2);
 Debounce digital2(PA4);
@@ -149,10 +174,24 @@ USBXBox360 XBox360;
 #endif
 
 void setup(){
+  // default is 55_5
+  adc_set_sample_rate(ADC1, ADC_SMPR_239_5);
+  adc_set_sample_rate(ADC2, ADC_SMPR_239_5);
+  
+#if 0
+  for (uint32 i = 0 ; i < BOARD_NR_GPIO_PINS ; i++) {
+    if (i != PA11 && i != PA12) {
+      pinMode(i, INPUT_PULLDOWN);
+    }
+  }
+#endif  
+  
   for (uint32 i = 0 ; i < NUM_PADDLES ; i++) {
     pinMode(analog[i]->port, INPUT_ANALOG);
     pinMode(digital[i]->pin, INPUT_PULLDOWN);
   }
+
+#ifndef SERIAL_DEBUG  
 #if NUM_PADDLES == 1
   mode = digitalRead(digital[0]->pin) ? MODE_MOUSE : MODE_JOYSTICK;
 #else  
@@ -177,7 +216,11 @@ void setup(){
 #endif
 #ifdef SUPPORT_X360
   mode = MODE_X360;
-#endif  
+#endif
+#else
+  mode = MODE_JOYSTICK;
+#endif
+  
   pinMode(LED, OUTPUT);
   digitalWrite(LED, mode != MODE_MOUSE);
   HID.clear();
@@ -187,14 +230,20 @@ void setup(){
     USBComposite.setManufacturerString("Grand Idea Studio");
     USBComposite.setProductString("Stelladaptor 2600-to-USB Interface");
     joy1.registerProfile();
+#ifdef SERIAL_DEBUG
+    HID.registerComponent();
+    debug.registerComponent();
+    USBComposite.begin();
+#else        
     HID.begin();
+#endif    
   }
   else if (mode == MODE_DUAL_JOYSTICK) {
     USBComposite.setProductId(PRODUCT_ID+mode);
     USBComposite.setProductString("Paddle Dual Joystick");
     for (uint32 i=0; i<NUM_PADDLES; i++) {
       joys[i]->registerProfile();
-    }
+    }    
     HID.begin();
   }
   else if (mode == MODE_MOUSE) {
@@ -212,6 +261,11 @@ void setup(){
 #endif  
   while (!USBComposite);
 }
+
+#ifdef SERIAL_DEBUG
+uint32 countStart = 0;
+uint32 count = 0;
+#endif
 
 void loop(){
   uint32 pots[NUM_PADDLES];
@@ -268,5 +322,27 @@ void loop(){
   else if (mode == MODE_MOUSE) {
     mouse.move(32767*pots[0]/4095,32767*pots[1]/4095);
   }
+#ifdef SERIAL_DEBUG
+  count++;
+  if (count == 1000) {
+    uint32 t = millis() - countStart;
+    char out[10];
+    out[9] = 0;
+    char *p = out+8;
+    while(1) {
+      *p = t%10+'0';
+      t/=10;
+      if (t==0) {
+        debug.write(p);
+        debug.write("\n");
+        break;
+      }
+      p--;
+    }
+    count = 0;
+    countStart = millis();
+  }
+#endif  
+  
 }
 
