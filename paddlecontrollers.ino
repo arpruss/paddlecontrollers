@@ -15,7 +15,7 @@
 // 100: 16 ms
 // 800: 36 ms
 #define NUM_PADDLES 2
-#define HYSTERESIS 10 // shifts smaller than this are rejected
+#define HYSTERESIS 20 // shifts smaller than this are rejected
 #define MAX_HYSTERESIS_REJECTIONS 8 // unless we've reached this many of them, and then we use an average
 #define READ_ITERATIONS 80
 
@@ -116,10 +116,10 @@ class AnalogPort {
     uint32 getValue() {
       uint32 v = 0;
 
-      //nvic_globalirq_disable();
+//      nvic_globalirq_disable();
       for (uint32 i = 0 ; i < READ_ITERATIONS ; i++)
         v += analogRead2(port);
-      //nvic_globalirq_enable();
+//      nvic_globalirq_enable();
       v = (v + READ_ITERATIONS / 2) / READ_ITERATIONS;
 
       if (oldValue != NO_VALUE && v != oldValue && v < oldValue + HYSTERESIS && oldValue < v + HYSTERESIS) {
