@@ -14,6 +14,11 @@
 // 80: 12 ms
 // 100: 16 ms
 // 800: 36 ms
+
+#define NUM_EXTRA 4  // number of extra keys that emulate keyboard presses
+#if NUM_EXTRA
+const uint16 extraKeys[NUM_EXTRA] = { KEY_F1, KEY_F2, '[', ']' };
+#endif
 #define NUM_PADDLES 2
 #define HYSTERESIS 20 // shifts smaller than this are rejected
 #define MAX_HYSTERESIS_REJECTIONS 8 // unless we've reached this many of them, and then we use an average
@@ -23,7 +28,7 @@
 
 
 // modified from Stelladaptor
-uint8 dualAxisDualButton_desc[] = {
+uint8 dualAxis_desc[] = {
   0x05, 0x01,                    // USAGE_PAGE (Generic Desktop)
   0x15, 0x00,                    // LOGICAL_MINIMUM (0)
   0x09, 0x04,                    // USAGE (Joystick)
@@ -57,9 +62,9 @@ uint8 dualAxisDualButton_desc[] = {
   0xc0                           // END_COLLECTION
 };
 
-HIDReportDescriptor dualAxisDualButton = {
-  dualAxisDualButton_desc,
-  sizeof(dualAxisDualButton_desc)
+HIDReportDescriptor dualAxis = {
+  dualAxis_desc,
+  sizeof(dualAxis_desc)
 };
 
 typedef struct {
@@ -75,7 +80,7 @@ class HIDSimpleJoystick : public HIDReporter {
   public:
     SimpleJoystickReport_t joyReport;
     HIDSimpleJoystick(USBHID& HID, uint8_t reportID = HID_JOYSTICK_REPORT_ID)
-      : HIDReporter(HID, &dualAxisDualButton, (uint8_t*) & joyReport, sizeof(joyReport), reportID) {
+      : HIDReporter(HID, &dualAxis, (uint8_t*) & joyReport, sizeof(joyReport), reportID) {
       joyReport.button1 = 0;
       joyReport.button2 = 0;
       joyReport.x = 512;
@@ -158,7 +163,16 @@ AnalogPort analog2(ANALOG2);
 AnalogPort* analog[NUM_PADDLES] = { &analog1, &analog2 };
 Debounce digital1(PA2);
 Debounce digital2(PA4);
-Debounce* digital[NUM_PADDLES] = { &digital1, &digital2 };
+#define NUM_DIGITAL (NUM_PADDLES+NUM_EXTRA)
+#if NUM_EXTRA
+Debounce extra1(PA5);
+Debounce extra2(PA6);
+Debounce extra3(PA7);
+Debounce extra4(PA8);
+Debounce* digital[NUM_DIGITAL] = { &digital1, &digital2, &extra1, &extra2, &extra3, &extra4 };
+#else
+Debounce* digital[NUM_DIGITAL] = { &digital1, &digital2 };
+#endif
 const uint32 mouseButtons[2] = { MOUSE_LEFT, MOUSE_RIGHT };
 
 USBHID HID;
@@ -166,6 +180,9 @@ HIDSimpleJoystick joy1(HID);
 HIDSimpleJoystick joy2(HID);
 HIDSimpleJoystick* joys[2] = { &joy1, &joy2 };
 HIDAbsMouse mouse(HID);
+#if NUM_EXTRA
+HIDKeyboard keyboard(HID);
+#endif
 #ifdef SUPPORT_X360
 USBXBox360 XBox360;
 #endif
@@ -183,10 +200,11 @@ void setup() {
   }
 #endif
 
-  for (uint32 i = 0 ; i < NUM_PADDLES ; i++) {
+  for (uint32 i = 0 ; i < NUM_PADDLES ; i++) 
     pinMode(analog[i]->port, INPUT_ANALOG);
+
+  for (uint32 i = 0 ; i < NUM_DIGITAL ; i++) 
     pinMode(digital[i]->pin, INPUT_PULLDOWN);
-  }
 
 #ifndef SERIAL_DEBUG
 #if NUM_PADDLES == 1
@@ -227,6 +245,9 @@ void setup() {
     USBComposite.setManufacturerString("Grand Idea Studio");
     USBComposite.setProductString("Stelladaptor 2600-to-USB Interface");
     joy1.registerProfile();
+#if NUM_EXTRA    
+    keyboard.registerProfile();
+#endif    
 #ifdef SERIAL_DEBUG
     HID.registerComponent();
     debug.registerComponent();
@@ -241,12 +262,18 @@ void setup() {
     for (uint32 i = 0; i < NUM_PADDLES; i++) {
       joys[i]->registerProfile();
     }
+#if NUM_EXTRA    
+    keyboard.registerProfile();
+#endif    
     HID.begin();
   }
   else if (mode == MODE_MOUSE) {
     USBComposite.setProductId(PRODUCT_ID + mode);
     USBComposite.setProductString("Paddle Mouse");
     mouse.registerProfile();
+#if NUM_EXTRA    
+    keyboard.registerProfile();
+#endif    
     HID.begin();
   }
 #ifdef SUPPORT_X360
@@ -292,6 +319,19 @@ void loop() {
       }
     }
   }
+
+#if NUM_EXTRA
+  for (uint32 i = 0 ; i < NUM_EXTRA ; i++) {
+    uint32 b = digital[NUM_PADDLES + i]->getEvent();
+    if (b != DEBOUNCE_NONE) {
+      if(b == DEBOUNCE_PRESSED)
+        keyboard.press(extraKeys[i]);
+      else
+        keyboard.release(extraKeys[i]);
+    }
+  }
+#endif  
+  
   if (mode == MODE_JOYSTICK) {
     joy1.joyReport.x = pots[0] / 4;
 #if NUM_PADDLES > 1
