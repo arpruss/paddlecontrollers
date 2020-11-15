@@ -292,6 +292,9 @@ uint32 count = 0;
 #endif
 
 void loop() {
+  if (!USBComposite.isReady())
+    return;
+    
   uint32 pots[NUM_PADDLES];
 
   for (uint32 i = 0 ; i < NUM_PADDLES ; i++ ) {
