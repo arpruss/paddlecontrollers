@@ -12,7 +12,7 @@
 // for our single-byte usage case. 
 
 uint32_t pageBase;
-uint8 storage[254];
+uint8 storage[255];
 
 static boolean invalid = true;
 
@@ -107,6 +107,7 @@ static void EEPROM8_reset(void) {
   for(uint32_t i=0; i<255; i++)
     storage[i] = 0;
 }
+
 
 void EEPROM8_init(void) {
   uint32_t flashSize = *(uint16 *) (0x1FFFF7E0);
